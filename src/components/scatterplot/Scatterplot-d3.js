@@ -1,210 +1,230 @@
-import * as d3 from 'd3'
-import { getDefaultFontSize } from '../../utils/helper';
+import * as d3 from 'd3';
 
 class ScatterplotD3 {
-    margin = {top: 100, right: 10, bottom: 50, left: 100};
-    size;
-    height;
-    width;
-    matSvg;
-    // add specific class properties used for the vis render/updates
-    defaultOpacity=0.3;
-    transitionDuration=1000;
-    circleRadius = 3;
-    xScale;
-    yScale;
-
-    constructor(el){
-        this.el=el;
-    };
-
-    create = function (config) {
-        this.size = {width: config.size.width, height: config.size.height};
-
-        // get the effect size of the view by subtracting the margin
-        this.width = this.size.width - this.margin.left - this.margin.right;
-        this.height = this.size.height - this.margin.top - this.margin.bottom;
-
-        // initialize the svg and keep it in a class property to reuse it in renderMatrix()
-        this.matSvg=d3.select(this.el).append("svg")
-            .attr("width", this.width + this.margin.left + this.margin.right)
-            .attr("height", this.height + this.margin.top + this.margin.bottom)
+    constructor(svgElement, onBrush) {
+        this.svgElement = svgElement;
+        this.onBrush = onBrush;
+        this.margin = { top: 50, right: 50, bottom: 50, left: 50 };
+        this.width = svgElement.clientWidth - this.margin.left - this.margin.right;
+        this.height = svgElement.clientHeight - this.margin.top - this.margin.bottom;
+        this.svg = d3.select(svgElement)
             .append("g")
-            .attr("class","matSvgG")
-            .attr("transform", "translate(" + this.margin.left + "," + this.margin.top + ")");
-        ;
+            .attr("transform", `translate(${this.margin.left},${this.margin.top})`);
 
-        this.xScale = d3.scaleLinear().range([0,this.width]);
-        this.yScale = d3.scaleLinear().range([this.height,0]);
+        this.xAxisGroup = this.svg.append("g")
+            .attr("class", "xAxisG")
+            .attr("transform", "translate(0," + this.height + ")");
+        
+        this.xAxisGroup.append("text")
+            .attr("class", "xAxisLabel")
+            .attr("x", this.width / 2)
+            .attr("y", this.margin.bottom - 10)
+            .attr("fill", "black")
+            .style("text-anchor", "middle");
 
-        // build xAxisG
-        this.matSvg.append("g")
-            .attr("class","xAxisG")
-            .attr("transform","translate(0,"+this.height+")")
-        ;
-        this.matSvg.append("g")
-            .attr("class","yAxisG")
-        ;
+        this.yAxisGroup = this.svg.append("g")
+            .attr("class", "yAxisG");
 
-        // Add a brush for selection
-        this.brush = d3.brush()
-            .extent([[0, 0], [this.width, this.height]])
-            .on("start brush end", this.brushHandler);
+        this.yAxisGroup.append("text")
+            .attr("class", "yAxisLabel")
+            .attr("transform", "rotate(-90)")
+            .attr("x", -this.height / 2)
+            .attr("y", -this.margin.left + 10)
+            .attr("fill", "black")
+            .style("text-anchor", "middle");
 
-        // Append brush to SVG
-        this.matSvg.append("g")
-            .attr("class", "brush")
-            .call(this.brush);
+        this.highlightedItems = new Set();
+        this.circles = null;  
     }
 
-    brushHandler = (event) => {
-        const selection = event.selection;
-        if (selection === null) {
-            this.matSvg.selectAll(".dotG").classed("selected", false); // Reset selection if brush is cleared
-            this.changeBorderAndOpacity(this.matSvg.selectAll(".dotG")); // Update appearance
+    render(data, xAttribute, yAttribute) {
+        this.data = data; 
+        this.updateAxis(data, xAttribute, yAttribute);
+    
+        const isXDate = xAttribute === "Date";
+        const isYDate = yAttribute === "Date";
+    
+        const xScale = isXDate
+            ? d3.scaleTime()
+            : d3.scaleLinear();
+
+        xScale
+            .domain(d3.extent(data, d => isXDate ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]))
+            .range([0, this.width]);
+    
+        const yScale = isYDate
+            ? d3.scaleTime()
+            : d3.scaleLinear();
+        yScale
+            .domain(d3.extent(data, d => isYDate ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]))
+            .range([this.height, 0]);
+    
+        // Update circles with smooth transition
+        this.circles = this.svg.selectAll("circle")
+            .data(data, d => d.index)
+            .join(
+                enter => enter.append("circle")
+                    .attr("cx", d => xScale(isXDate ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]))
+                    .attr("cy", d => yScale(isYDate ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]))
+                    .attr("r", 3)
+                    .attr("fill", d => this.highlightedItems.has(d) ? "red" : "black")
+                    .attr("opacity", 0.3),
+                update => update
+                    .transition()  
+                    .duration(1000)  
+                    .attr("cx", d => xScale(isXDate ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]))
+                    .attr("cy", d => yScale(isYDate ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]))
+            );
+    
+        this.svg.selectAll(".brush").remove();
+    
+        const brushGroup = this.svg.append("g")
+            .attr("class", "brush")
+            .style("visibility", "hidden"); 
+    
+        const brush = d3.brush()
+            .extent([[0, 0], [this.width, this.height]])
+            .on("start", (event) => {
+                brushGroup.style("visibility", "visible"); 
+                // Reset heatmap selection
+                d3.selectAll(".cell") 
+                .attr("stroke", "#ccc")     
+                .attr("stroke-width", 0.5);
+                        
+            })
+            .on("brush", (event) => {
+                if (event.selection) {
+                    const [[x0, y0], [x1, y1]] = event.selection;
+                    const selectedData = data.filter(d =>
+                        x0 <= xScale(isXDate ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]) &&
+                        xScale(isXDate ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]) <= x1 &&
+                        y0 <= yScale(isYDate ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]) &&
+                        yScale(isYDate ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]) <= y1
+                    );
+                    this.highlightedItems = new Set(selectedData);
+                    this.circles
+                        .attr("fill", d => this.highlightedItems.has(d) ? "red" : "black");
+                    this.onBrush(selectedData);
+                }
+            });
+    
+        brushGroup.call(brush);
+    }
+    
+    
+    highLightElements(selectedItems) {
+        //console.log("Selected items:", selectedItems);
+        if (!selectedItems || selectedItems.size === 0) {
+            // Clear highlights if no items are selected
+            this.highlightedItems.clear();
+            this.circles
+                .transition()  
+                .duration(1000)  
+                .attr("fill", "black");
             return;
         }
     
-        const [[x0, y0], [x1, y1]] = selection;
-        console.log("Brush bounds:", { x0, y0, x1, y1 }); // Log exact brush bounds
+        this.highlightedItems = new Set(selectedItems);
     
-        // Update class for circles within the selection box
-        this.matSvg.selectAll(".dotG")
-            .classed("selected", d => {
-                const x = this.xScale(d[this.xAttribute]);
-                const y = this.yScale(d[this.yAttribute]);
-                return x0 <= x && x <= x1 && y0 <= y && y <= y1;
-            });
-    
-        this.changeBorderAndOpacity(this.matSvg.selectAll(".dotG")); // Update appearance
-    }
-    
-    changeBorderAndOpacity(selection){
+        // Update the circles to reflect the highlighted points with transition
+        this.circles
+        .transition()  
+        .duration(1000)  
+        .attr("fill", d => {
+            if (!d.Date || typeof d.Date !== 'string' || d.Date.trim() === '') {
+                return "black"; // Return black if the Date is invalid
+            }
 
-        console.log("Applying border and opacity changes to selection:", selection);
-        
-        selection.each(function(d) {
-            //console.log("Dot data:", d, "Selected:", d3.select(this).classed("selected"));
+            // Extract the day from the Date field (in format "DD/MM/YYYY")
+            const dateParts = d.Date.split("/");
+            const dateObj = new Date(`${dateParts[1]}/${dateParts[0]}/${dateParts[2]}`);
+            const dayFromData = dateObj.getDay(); // Get the day of the week (0-6)
+            const monthFromData = dateObj.getMonth() + 1; // Get the month (1-12)
+
+            // Check if the item in data matches the selected filters
+            const isHighlighted = Array.from(this.highlightedItems).some(item => {
+            const isDayMatch = item.Days === dayFromData;
+            const isMonthMatch = item.Months === monthFromData;
+            const isSeasonMatch = item.Seasons === d.Seasons;
+            const isHolidayMatch = item.Holiday === d.Holiday;
+            const isHourMatch = item.Hours === d.Hour;
+
+            const match = [isDayMatch, isMonthMatch, isHolidayMatch, isSeasonMatch, isHourMatch].filter(Boolean).length;
+            
+            // Return true if the item matches the 2 filters (the x and y attributes of the heatmap)
+            return match === 2;
         });
-        
-        selection.style("opacity", (item)=>{
-            return item.selected?1:this.defaultOpacity;
-        })
-        ;
 
-        selection.select(".dotCircle")
-            .attr("stroke-width",(item)=>{
-                return item.selected?2:0;
-            })
-        ;
+        return isHighlighted ? "red" : "black";
+        });
+
     }
-
-    updateDots(selection,xAttribute,yAttribute){
-        // transform selection
-        selection
-            .transition().duration(this.transitionDuration)
-            .attr("transform", (item)=>{
-                // use scales to return shape position from data values
-                const xPos = this.xScale(item[xAttribute]);
-                const yPos = this.yScale(item[yAttribute]);
-                return "translate("+xPos+","+yPos+")";
-            })
-        this.changeBorderAndOpacity(selection)
-    }
-
-    highlightSelectedItems(selectedItems){
-        // this.changeBorderAndOpacity(updateSelection);
-        this.matSvg.selectAll(".dotG")
-            // all elements with the class .cellG (empty the first time)
-            .data(selectedItems,(itemData)=>itemData.index)
-            .join(
-                enter=>enter,
-                update=>{
-                    this.changeBorderAndOpacity(update);
-                },
-                exit => exit
-            )
-        ;
-    }
-
-    updateAxis = function(visData, xAttribute, yAttribute) {
-        let minX, maxX;
+    
+    
+    updateAxis(visData, xAttribute, yAttribute) {
+        const minX = d3.min(visData, d => xAttribute === "Date" ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]);
+        const maxX = d3.max(visData, d => xAttribute === "Date" ? d3.timeParse("%d/%m/%Y")(d[xAttribute]) : d[xAttribute]);
+        const minY = d3.min(visData, d => yAttribute === "Date" ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]);
+        const maxY = d3.max(visData, d => yAttribute === "Date" ? d3.timeParse("%d/%m/%Y")(d[yAttribute]) : d[yAttribute]);
     
         if (xAttribute === "Date") {
-            // Use scaleTime for dates and format as "dd/mm/yyyy"
             this.xScale = d3.scaleTime().range([0, this.width]);
-            minX = d3.min(visData, item => item[xAttribute]);
-            maxX = d3.max(visData, item => item[xAttribute]);
             this.xScale.domain([minX, maxX]);
-    
-            this.matSvg.select(".xAxisG")
-                .transition().duration(this.transitionDuration)
-                .call(d3.axisBottom(this.xScale).tickFormat(d3.timeFormat("%d/%m/%Y")));
         } else {
             this.xScale = d3.scaleLinear().range([0, this.width]);
-            minX = d3.min(visData, item => item[xAttribute]);
-            maxX = d3.max(visData, item => item[xAttribute]);
             this.xScale.domain([minX, maxX]);
-    
-            this.matSvg.select(".xAxisG")
-                .transition().duration(this.transitionDuration)
-                .call(d3.axisBottom(this.xScale));
+        }
+        if (yAttribute === "Date") {
+            this.yScale = d3.scaleTime().range([this.height, 0]);
+            this.yScale.domain([minY, maxY]);
+        } else {
+            this.yScale = d3.scaleLinear().range([this.height, 0]);
+            this.yScale.domain([minY, maxY]);
         }
     
-        const minY = d3.min(visData, item => item[yAttribute]);
-        const maxY = d3.max(visData, item => item[yAttribute]);
-        this.yScale.domain([minY, maxY]);
-    
-        this.matSvg.select(".yAxisG")
-            .transition().duration(this.transitionDuration)
-            .call(d3.axisLeft(this.yScale));
-    }
-    
-    renderScatterplot = function (visData, xAttribute, yAttribute, controllerMethods){
-        // build the size scales and x,y axis
-        this.updateAxis(visData,xAttribute,yAttribute);
-
-        this.matSvg.selectAll(".dotG")
-            // all elements with the class .cellG (empty the first time)
-            .data(visData,(itemData)=>itemData.index)
-            .join(
-                enter=>{
-                    console.log("Creating new dots for data:", enter.data()); // Log entering data
-                
-                    // all data items to add:
-                    // doesn’exist in the select but exist in the new array
-                    const itemG=enter.append("g")
-                        .attr("class","dotG")
-                        .style("opacity",this.defaultOpacity)
-                        .on("click", (event,itemData)=>{
-                            controllerMethods.handleOnClick(itemData);
-                        })
-                    ;
-                    // render element as child of each element "g"
-                    itemG.append("circle")
-                        .attr("class","dotCircle")
-                        .attr("r",this.circleRadius)
-                        .attr("stroke","red")
-                    ;
-                    this.updateDots(itemG,xAttribute,yAttribute);
-                },
-                update=>{
-                    console.log("Updating dots with data:", update.data()); // Log updating data
-                
-                    this.updateDots(update,xAttribute,yAttribute)
-                },
-                exit =>{
-                    console.log("Removing dots for data:", exit.data()); // Log exiting data
-                
-                    exit.remove()
-                    ;
-                }
-
-            )
-    }
-
-    clear = function(){
-        d3.select(this.el).selectAll("*").remove();
+        if (xAttribute === "Date") {
+            this.xAxisGroup
+                .transition()
+                .duration(500)
+                .call(d3.axisBottom(this.xScale).tickFormat(d => {
+                    // Format the date to display MM/YYYY with the first 3 letters of the month
+                    const formattedDate = d3.timeFormat("%B %Y")(d); // Full month name (e.g., "January 2018")
+                    const month = formattedDate.split(" ")[0]; // Get the month part (e.g., "January")
+                    const truncatedMonth = month.substring(0, 3); // Truncate to the first 3 letters (e.g., "Jan")
+                    const year = formattedDate.split(" ")[1]; // Get the year part (e.g., "2018")
+                    return `${truncatedMonth} ${year}`; // Return "Jan 2018"
+                }));
+        } else {
+            this.xAxisGroup
+                .transition()
+                .duration(500)
+                .call(d3.axisBottom(this.xScale));
+        }
+        
+        if (yAttribute === "Date") {
+            this.yAxisGroup
+                .transition()
+                .duration(500)
+                .call(d3.axisLeft(this.yScale).tickFormat(d => {
+                    // Format the date to display MM/YYYY with the first 3 letters of the month
+                    const formattedDate = d3.timeFormat("%B %Y")(d); 
+                    const month = formattedDate.split(" ")[0]; 
+                    const truncatedMonth = month.substring(0, 3); 
+                    const year = formattedDate.split(" ")[1]; 
+                    return `${truncatedMonth} ${year}`; 
+                }));
+        } else {
+            this.yAxisGroup
+                .transition()
+                .duration(500)
+                .call(d3.axisLeft(this.yScale));
+        }
+        
+        // Update x-axis label
+        this.xAxisGroup.select(".xAxisLabel").text(xAttribute);
+        // Update y-axis label
+        this.yAxisGroup.select(".yAxisLabel").text(yAttribute);
     }
 }
+
 export default ScatterplotD3;

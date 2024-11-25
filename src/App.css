@@ -1,19 +1,50 @@
+
 .App {
+    padding: 20px;
+    font-family: Arial, sans-serif;
+    background-color: #ffffff;
     text-align: center;
     height: 100%;
-}
-#control-bar-container{
-    height: 10%;
-}
-#view-container{
-    height:80%;
-}
-.row:after {
-    content: "";
-    display: table;
-    clear: both;
-}
-.col2{
-    float: left;
-    width: 50%;
-}
+  }
+  
+  .App h1 {
+    font-size: 2rem;
+    color: #333;
+    margin-bottom: 5px; 
+    margin-top: 0; 
+  }
+  
+  .App p {
+    font-size: 1rem;
+    margin-top: 5px;
+    margin-bottom: 5px;
+    color: #555;
+    margin-bottom: 10px; 
+    margin-top: 0; 
+  }
+  
+  .visualization-container {
+    display: flex;
+    height: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap; 
+    padding: 0 10px;
+  }
+  
+  .visualization-container > div {
+    flex: 1;
+    min-width: 300px;
+    max-width: 48%; 
+    height: 100%;
+
+  }
+
+  .button {
+    margin: 10px;
+    padding: 10px 20px;
+    background-color: #faf2d8;
+    color: #000000;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+  }
